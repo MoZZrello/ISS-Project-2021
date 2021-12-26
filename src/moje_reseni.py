@@ -8,13 +8,12 @@ import struct
 def normalizeData(audio, sampleCount):
     averageValue = sum(audio) / sampleCount
     normalizedAudio = audio - averageValue
-    normalizedAudio = normalizedAudio / max(abs(normalizedAudio))
-    return normalizedAudio
+    return (normalizedAudio / max(abs(normalizedAudio)))
 
 def getFrames(inputSignal, sampleCount):
     framesArr = []
     for i in range(sampleCount // 512 - 1):
-        framesArr.append(inputSignal[i * 512 : i * 512 + 1024])
+        framesArr.append(inputSignal[i * 512: i * 512 + 1024])
     return framesArr
 
 def DFTcoeffs(x, N):
@@ -26,15 +25,15 @@ def DFTcoeffs(x, N):
 
 def createDFT(frames, sampleRate):
     print("Calculating Discrete Fourier Transform")
-
-    #FFT na porovnanie
-    #magnitudes = abs(np.array([np.fft.fft(frames[k])[0: 1024 // 2] for k in range(len(frames))]))
-
-    #DFT implementovane mnou
     coefficients = np.array([DFTcoeffs(np.array(frames[frame]), 1024) for frame in range(len(frames))])
     magnitudes = abs(coefficients)
-    frequencies = [k * sampleRate // 1024 for k in range(1024 // 2)]
+    frequencies = [k * sampleRate // 1024 for k in range(512)]
     print("Finished Discrete Fourier Transform")
+    return magnitudes, frequencies
+
+def createFFT(frames, sampleRate):
+    magnitudes = abs(np.array([np.fft.fft(frames[k])[0: 512] for k in range(len(frames))]))
+    frequencies = [k * sampleRate // 1024 for k in range(512)]
     return magnitudes, frequencies
 
 def getDF(cosAmount, magnitudes, frequencies):
@@ -80,7 +79,7 @@ def plotZP(zeros, poles):
     plt.show()
     return
 
-def createZPG(LD, LU, UD, UU, filterAmount, sampleRate):
+def createZP2SOS(LD, LU, UD, UU, filterAmount, sampleRate):
     zeros = []
     poles = []
     gains = []
@@ -94,7 +93,13 @@ def createZPG(LD, LU, UD, UU, filterAmount, sampleRate):
         poles.append(p)
         gains.append(g)
     plotZP(np.array(zeros[0]),np.array((poles[0])))
-    return zeros, poles, gains
+    print("Zeros: ")
+    print(zeros[0])
+    print("Poles: ")
+    print(poles[0])
+
+    SOSformat = [signal.zpk2sos(zeros[i], poles[i], gains[i]) for i in range(dfAmount)]
+    return SOSformat
 
 def plotFrequency(SOSformat, frequencies, sampleCount, sampleRate):
     fig, axes = plt.subplots(len(SOSformat))
@@ -111,9 +116,8 @@ def plotImpulse(SOSformat, freqs, plotCount, sampleCount):
     impulseResponseInputs[0] = 1
     fig, axes = plt.subplots(plotCount)
     for i in range(len(SOSformat)):
-        impulseResponse = signal.sosfilt(SOSformat[i], impulseResponseInputs)
         axes[i].set_title("Impulse response (" + str(freqs[i]) + " Hz)")
-        axes[i].plot(impulseResponse)
+        axes[i].plot(signal.sosfilt(SOSformat[i], impulseResponseInputs))
     fig.tight_layout()
     plt.show()
     return
@@ -140,6 +144,7 @@ def fltrAudio(filteredAudio, sampleCount, sampleRate, SOSformat):
 
 
 
+print("----------------------------------------------------------")
 #Otvorenie audio suboru
 sampleRate, audio = wavfile.read('../audio/xharma05.wav')
 print("Sample rate: ", sampleRate)
@@ -155,6 +160,7 @@ print("Audio length: ", timeLength, " seconds")
 #Nájdi minimálnu a maximálnu hodnotu signálu
 print("Minimal value: ", min(audio))
 print("Maximal value: ", max(audio))
+print("----------------------------------------------------------")
 
 #Vykresli vstupné audio
 plotArr = np.arange(0, timeLength, timeLength / sampleCount)
@@ -168,6 +174,7 @@ normalizedAudio = normalizeData(audio, sampleCount)
 #Získam rámce
 frames = getFrames(normalizedAudio, sampleCount)
 print("Audio contains", len(frames), "frames, all with ", len(frames[0]), "samples.")
+print("----------------------------------------------------------")
 
 #Plot one of the frames
 plotArr = np.arange(0, 1024 / sampleRate, 1 / sampleRate)
@@ -181,11 +188,16 @@ plt.show()
 
 #Diskretna Fourierova Transformacia - DFT
 magnitudes, frequencies = createDFT(frames, sampleRate)
+FFTmagnitudes, FFTfrequencies = createFFT(frames, sampleRate)
+res = np.allclose(magnitudes, FFTmagnitudes)
+print("Are DFT and FFT magnitudes equal within the tolerance: ", res)
 plt.plot(frequencies, magnitudes[0])
 plt.title("DISCRETE FOURIER TRANSFORM")
 plt.ylabel("MAGNITUDE")
 plt.xlabel("FREQUENCY [Hz]")
 plt.show()
+print("----------------------------------------------------------")
+
 
 #Spektrogram
 print("Creating spectrogram")
@@ -199,6 +211,7 @@ cbar = plt.colorbar()
 cbar.set_label('SPECTRAL POWER DENSITY [dB]', rotation=270, labelpad=15)
 plt.show()
 print("Spectrogram created")
+print("----------------------------------------------------------")
 
 #Hľadanie rušivých frekvencií
 dfAmount = 4
@@ -221,6 +234,7 @@ cbar = plt.colorbar()
 cbar.set_label('SPECTRAL POWER DENSITY [dB]', rotation=270, labelpad=15)
 plt.show()
 print("Spectrogram created")
+print("----------------------------------------------------------")
 
 #Generovanie signalu 4cos
 wav_file = wave.open("../audio/4cos.wav", "w")
@@ -229,32 +243,28 @@ for sample in disCos:
     wav_file.writeframes(struct.pack('h', int(sample * sampleRate)))
 
 #FILTER
-
 #Hranice filtra
 lowerUp = (df - 50)
 lowerDown = (df - 20)
 upperUp = (df + 20)
 upperDown = (df + 50)
+print("----------------------------------------------------------")
 
 #Nulové body a póly
-zeros, poles, gains = createZPG(lowerDown, lowerUp, upperDown, upperUp, dfAmount, sampleRate)
-print("Zeros: ")
-print(zeros[0])
-print("Poles: ")
-print(poles[0])
+SOS = createZP2SOS(lowerDown, lowerUp, upperDown, upperUp, dfAmount, sampleRate)
+print("----------------------------------------------------------")
 
 #Výpočet a vykreslenie Frekvenčnej charakteristiky
-#Pre zjednodusenie prevedieme na SOS
-SOSformat = [signal.zpk2sos(zeros[i], poles[i], gains[i]) for i in range(dfAmount)]
 print("Filters coefficients:")
-[print(SOSformat[i]) for i in range(dfAmount)]
-plotFrequency(SOSformat, df, sampleCount, sampleRate)
-plotImpulse(SOSformat, df, dfAmount, 512)
+[print(SOS[i]) for i in range(dfAmount)]
+plotFrequency(SOS, df, sampleCount, sampleRate)
+plotImpulse(SOS, df, dfAmount, 512)
 
-filteredAudio = fltrAudio(normalizedAudio, sampleCount, sampleRate, SOSformat)
+filteredAudio = fltrAudio(normalizedAudio, sampleCount, sampleRate, SOS)
 
 #Vytvorit filtrovanu zvukovu stopu
 wav_file = wave.open("../audio/clean_4pasmovezadrze.wav", "w")
 wav_file.setparams((1, 2, sampleRate, sampleCount, "NONE", ""))
 for sample in filteredAudio:
     wav_file.writeframes(struct.pack('h', int(sample * 0x7fff)))
+print("----------------------------------------------------------")
